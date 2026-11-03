@@ -6,7 +6,7 @@ A top-down plane shooter game for Android.
 
 ## ⬇️ Download APK
 
-### [Download SkyRush.apk](download/SkyRush.apk?raw=true)
+### [Download SkyRush.apk](https://raw.githubusercontent.com/synt4x-an0ndo/sky-rush/main/download/SkyRush.apk)
 
 1. Tap the link above on your Android phone to download the APK.
 2. Open the file. If asked, allow installing apps from this source.
