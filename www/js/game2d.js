@@ -226,32 +226,121 @@
       g.gain.exponentialRampToValueAtTime(0.0001, actx.currentTime + dur); o.stop(actx.currentTime + dur);
     } catch (e) {}
   }
-  // ---- simple looping background music ----
-  let musicTimer = null, musicStep = 0;
-  function tone(freq, dur, vol, type) {
-    try {
-      if (!actx) return;
-      const o = actx.createOscillator(), g = actx.createGain();
-      o.type = type || "triangle"; o.frequency.value = freq; g.gain.value = vol;
-      o.connect(g); g.connect(actx.destination); o.start();
-      g.gain.exponentialRampToValueAtTime(0.0001, actx.currentTime + dur); o.stop(actx.currentTime + dur);
-    } catch (e) {}
+  // ---- procedural soundtrack (Web Audio, no audio files) ----
+  // Each track loops 4 bars of 16 steps. Notes are MIDI numbers; 0 means rest.
+  const TRACKS = {
+    menu: { bpm: 88, chords: [[57,60,64],[53,57,60],[48,52,55],[55,59,62]], drums: false,
+      lead: [69,0,0,72, 0,0,76,0, 74,0,72,0, 0,0,0,0,  69,0,0,72, 0,0,77,0, 76,0,72,0, 0,0,0,0,
+             67,0,0,72, 0,0,76,0, 79,0,76,0, 0,0,0,0,  74,0,0,71, 0,0,74,0, 67,0,0,0, 0,0,0,0] },
+    play: { bpm: 132, chords: [[57,60,64],[53,57,60],[48,52,55],[55,59,62]], drums: true,
+      lead: [76,0,76,79, 0,76,74,0, 72,0,74,76, 0,0,69,0,  77,0,77,81, 0,77,76,0, 72,0,74,77, 0,0,76,0,
+             79,0,79,84, 0,79,76,0, 72,0,76,79, 0,0,76,0,  74,0,74,79, 0,74,71,0, 74,0,79,83, 0,0,79,0] },
+    boss: { bpm: 152, chords: [[52,55,59],[52,55,59],[48,52,55],[50,54,57]], drums: true,
+      lead: [76,76,0,76, 79,0,76,0, 83,0,82,0, 79,0,76,0,  76,76,0,76, 79,0,76,0, 74,0,72,0, 71,0,0,0,
+             72,72,0,72, 76,0,72,0, 79,0,78,0, 76,0,72,0,  74,74,0,74, 78,0,74,0, 81,0,78,0, 74,0,0,0] },
+  };
+  let musicTimer = null, musicStep = 0, musicMode = "play", musicBus = null, nextNoteAt = 0, noiseBuf = null;
+  let musicOn = true;
+  try { musicOn = localStorage.getItem("skyrush_music") !== "off"; } catch (e) {}
+  const midiHz = (n) => 440 * Math.pow(2, (n - 69) / 12);
+  function ensureMusicBus() {
+    if (musicBus || !actx) return;
+    const comp = actx.createDynamicsCompressor();
+    musicBus = actx.createGain();
+    musicBus.connect(comp); comp.connect(actx.destination);
+    noiseBuf = actx.createBuffer(1, Math.floor(actx.sampleRate * 0.25), actx.sampleRate);
+    const d = noiseBuf.getChannelData(0);
+    for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
   }
-  function startMusic() {
-    if (musicTimer || !actx) return;
-    const notes = [0, 3, 7, 10, 12, 10, 7, 3, 5, 8, 12, 8]; // moody arpeggio (semitones)
-    const root = 174; // F3-ish
-    musicStep = 0;
-    musicTimer = setInterval(() => {
-      if (!actx || G.state !== "playing") return;
-      const semi = notes[musicStep % notes.length];
-      const f = root * Math.pow(2, semi / 12);
-      if (musicStep % 2 === 0) tone(f / 2, 0.28, 0.035, "triangle"); // bass
-      tone(f, 0.16, 0.02, "square");                                  // lead
-      musicStep++;
-    }, 235);
+  function mNote(t, midi, dur, vol, type, cutoff) {
+    const o = actx.createOscillator(), g = actx.createGain();
+    o.type = type; o.frequency.value = midiHz(midi);
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.exponentialRampToValueAtTime(vol, t + Math.min(0.015, dur / 3));
+    g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+    if (cutoff) {
+      const f = actx.createBiquadFilter(); f.type = "lowpass"; f.frequency.value = cutoff;
+      o.connect(f); f.connect(g);
+    } else o.connect(g);
+    g.connect(musicBus); o.start(t); o.stop(t + dur + 0.02);
   }
-  function stopMusic() { if (musicTimer) { clearInterval(musicTimer); musicTimer = null; } }
+  function mKick(t) {
+    const o = actx.createOscillator(), g = actx.createGain();
+    o.frequency.setValueAtTime(140, t); o.frequency.exponentialRampToValueAtTime(45, t + 0.12);
+    g.gain.setValueAtTime(0.4, t); g.gain.exponentialRampToValueAtTime(0.0001, t + 0.16);
+    o.connect(g); g.connect(musicBus); o.start(t); o.stop(t + 0.18);
+  }
+  function mNoise(t, dur, vol, freq) {
+    const s = actx.createBufferSource(), g = actx.createGain(), f = actx.createBiquadFilter();
+    s.buffer = noiseBuf; f.type = "highpass"; f.frequency.value = freq;
+    g.gain.setValueAtTime(vol, t); g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+    s.connect(f); f.connect(g); g.connect(musicBus); s.start(t); s.stop(t + dur + 0.02);
+  }
+  function playStep(mode, step, t, sixteenth) {
+    const tr = TRACKS[mode], s = step % 16, chord = tr.chords[Math.floor(step / 16) % 4];
+    const lead = tr.lead[step % 64];
+    if (tr.drums) {
+      if (s % 4 === 0) mKick(t);
+      if (s % 8 === 4) mNoise(t, 0.14, 0.16, 1500);
+      if (s % 2 === 0) mNoise(t, 0.04, 0.05, 7000);
+      if (s % 2 === 0 || s === 7) mNote(t, chord[0] - 24, sixteenth * 1.6, 0.17, "sawtooth", 500);
+      if (s % 2 === 1) mNote(t, chord[Math.floor(step / 2) % 3] + 12, sixteenth * 1.3, 0.035, "square", 2600);
+      if (lead) mNote(t, lead, sixteenth * 1.8, 0.075, "square", 3200);
+    } else {
+      if (s === 0) chord.forEach((n) => mNote(t, n, sixteenth * 15, 0.05, "sawtooth", 750));
+      if (s === 0 || s === 8) mNote(t, chord[0] - 12, sixteenth * 7, 0.14, "triangle");
+      if (s % 2 === 0) mNote(t, chord[(s / 2) % 3] + 12, sixteenth * 3, 0.035, "triangle");
+      if (lead) mNote(t, lead, sixteenth * 5, 0.09, "sine");
+    }
+  }
+  function musicTick() {
+    if (!actx || !musicBus || !musicOn || actx.state !== "running") return;
+    let mode = musicMode;
+    if (mode !== "menu") {
+      if (G.state !== "playing") { nextNoteAt = actx.currentTime + 0.05; return; } // held while paused
+      mode = G.boss ? "boss" : "play";
+    }
+    const sixteenth = 60 / TRACKS[mode].bpm / 4;
+    if (nextNoteAt < actx.currentTime) nextNoteAt = actx.currentTime + 0.05;
+    while (nextNoteAt < actx.currentTime + 0.2) {
+      try { playStep(mode, musicStep, nextNoteAt, sixteenth); } catch (e) {}
+      nextNoteAt += sixteenth;
+      musicStep = (musicStep + 1) % 64;
+    }
+  }
+  function startMusic(mode) {
+    resumeAudio();
+    if (!actx) return;
+    ensureMusicBus();
+    const next = mode || "play";
+    if (next !== musicMode || !musicTimer) { musicStep = 0; nextNoteAt = 0; }
+    musicMode = next;
+    musicBus.gain.cancelScheduledValues(actx.currentTime);
+    musicBus.gain.setValueAtTime(musicOn ? 1 : 0, actx.currentTime);
+    if (!musicTimer) musicTimer = setInterval(musicTick, 50);
+  }
+  function stopMusic() {
+    if (musicTimer) { clearInterval(musicTimer); musicTimer = null; }
+    if (actx && musicBus) {
+      musicBus.gain.cancelScheduledValues(actx.currentTime);
+      musicBus.gain.setTargetAtTime(0, actx.currentTime, 0.04); // fade notes already queued
+    }
+  }
+  function setMusicOn(on) {
+    musicOn = on;
+    try { localStorage.setItem("skyrush_music", on ? "on" : "off"); } catch (e) {}
+    if (actx && musicBus) {
+      musicBus.gain.cancelScheduledValues(actx.currentTime);
+      musicBus.gain.setValueAtTime(on ? 1 : 0, actx.currentTime);
+    }
+    nextNoteAt = 0;
+  }
+  // Browsers only allow audio after a touch; stop it when the app is in the background.
+  document.addEventListener("pointerdown", resumeAudio);
+  document.addEventListener("visibilitychange", () => {
+    if (!actx) return;
+    try { if (document.hidden) actx.suspend(); else actx.resume(); } catch (e) {}
+  });
 
   // ---------- ENTITIES ----------
   function spawnEnemy() {
@@ -670,7 +759,7 @@
       setTimeout(() => { if (!this._splashDone) { this._splashDone = true; this.showMenu(); } }, 2400);
     },
     showMenu() {
-      this.hideHUD(); stopMusic();
+      this.hideHUD(); startMusic("menu");
       const start = Math.max(0, Math.min(window.MISSIONS.length - 1, window.SAVE.get().unlocked - 1));
       this.over(`<div class="panel">
         <h1>SKY <span>RUSH</span></h1>
@@ -683,10 +772,12 @@
           <button id="bHangar" class="btn ghost">✈ Hangar</button>
           <button id="bUpg" class="btn ghost">⚙ Upgrades</button>
         </div>
+        <button id="bMusic" class="btn ghost">${musicOn ? "🎵 Music: On" : "🔇 Music: Off"}</button>
         <p class="hint">Drag to fly · Auto-fire · Earn 🪙 to buy & upgrade planes</p>
         <p class="hint">Build by Gm Anondo</p>
       </div>`);
       this.el("bStart").onclick = () => { resumeAudio(); G.lives = 3; G.score = 0; this.hide(); startMission(start); };
+      this.el("bMusic").onclick = (e) => { setMusicOn(!musicOn); e.currentTarget.textContent = musicOn ? "🎵 Music: On" : "🔇 Music: Off"; };
       this.el("bDaily").onclick = () => this.showDaily();
       this.el("bSel").onclick = () => this.showSelect();
       this.el("bShop").onclick = () => this.showShop();
