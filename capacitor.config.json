@@ -1,0 +1,8 @@
+{
+  "appId": "com.rawbros.skyrush",
+  "appName": "Sky Rush",
+  "webDir": "www",
+  "android": {
+    "allowMixedContent": true
+  }
+}

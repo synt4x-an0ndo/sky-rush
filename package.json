@@ -1,0 +1,28 @@
+{
+  "name": "skyforce3d",
+  "version": "0.1.0",
+  "description": "SkyForce 3D - vertical shooter desktop app",
+  "author": "Gm Anondo",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "build": "electron-builder --win"
+  },
+  "build": {
+    "appId": "com.rawbros.skyforce3d",
+    "productName": "SkyForce 3D",
+    "files": [
+      "index.html",
+      "main.js",
+      "js/**"
+    ],
+    "win": {
+      "target": "portable"
+    }
+  },
+  "dependencies": {
+    "@capacitor/android": "^6.2.3",
+    "@capacitor/cli": "^6.2.3",
+    "@capacitor/core": "^6.2.3"
+  }
+}
