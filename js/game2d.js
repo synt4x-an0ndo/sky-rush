@@ -338,7 +338,9 @@
       this.el("starcount").textContent = G.stars;
       let hearts = ""; for (let i = 0; i < G.lives; i++) hearts += "❤";
       this.el("lives").textContent = hearts || "—";
-      this.el("hpfill").style.width = Math.max(0, G.hp) + "%";
+      const hpPercent = Math.max(0, Math.min(100, G.hp));
+      this.el("hpfill").style.width = hpPercent + "%";
+      const hpValue = this.el("hpvalue"); if (hpValue) hpValue.textContent = Math.round(hpPercent) + "%";
       let cur, goal;
       if (m.type === "survive") { cur = Math.floor(G.elapsed); goal = m.goal; }
       else if (m.type === "boss") { cur = G.boss ? (m.bossHp - G.boss.hp) : m.bossHp; goal = m.bossHp; }

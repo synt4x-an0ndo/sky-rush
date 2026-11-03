@@ -724,7 +724,9 @@
       this.el("starcount").textContent = (window.SAVE.get().stars + G.missionStars);
       let hearts = ""; for (let i = 0; i < G.lives; i++) hearts += "❤";
       this.el("lives").textContent = hearts || "—";
-      this.el("hpfill").style.width = Math.max(0, G.power / 5 * 100) + "%";
+      const powerPercent = Math.max(0, Math.min(100, G.power / 5 * 100));
+      this.el("hpfill").style.width = powerPercent + "%";
+      const hpValue = this.el("hpvalue"); if (hpValue) hpValue.textContent = Math.round(powerPercent) + "%";
       const pl = this.el("powerlvl"); if (pl) pl.textContent = "Lv " + G.power;
       const cc = this.el("coincount"); if (cc) cc.textContent = (window.SAVE.get().coins + G.runCoins);
       let cur, goal;
