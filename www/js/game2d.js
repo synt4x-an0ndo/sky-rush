@@ -22,7 +22,7 @@
   window.addEventListener("resize", measure);
   window.addEventListener("orientationchange", () => setTimeout(measure, 120));
 
-  const S = window.SPRITES;
+  const S = window.SPRITES, A = window.ASSETS;
 
   // ---------- pixel-art terrain tile (generated once, scrolled) ----------
   const TILE_LOW = 220, TILE_H = 1600;
@@ -196,6 +196,8 @@
     pdmg: 1, fireInt: 0.16, pspeed: 12, runCoins: 0, power: 1, terrainWorld: 0,
   };
 
+  const fxs = [];
+  function addFx(x, y, big, variant) { if (fxs.length < 24) fxs.push({ x, y, big: !!big, v: (variant || 0) % 6, t: 0 }); }
   const bullets = [], eBullets = [], enemies = [], stars = [], parts = [], coinItems = [];
   const player = { x: 0, y: 0, tx: 0, ty: 0, r: 22 };
   const input = { active: false };
@@ -216,7 +218,8 @@
 
   // ---------- AUDIO ----------
   let actx;
-  function resumeAudio() { try { if (!actx) actx = new (window.AudioContext || window.webkitAudioContext)(); actx.resume(); } catch (e) {} }
+  function resumeAudio() { try { if (!actx) actx = new (window.AudioContext || window.webkitAudioContext)(); actx.resume(); A.loadSfx(actx); } catch (e) {} }
+  function sfx(name, vol) { return A.playSfx(actx, name, vol); }
   function beep(freq, dur, vol, type) {
     try {
       if (!actx) return;
@@ -226,114 +229,19 @@
       g.gain.exponentialRampToValueAtTime(0.0001, actx.currentTime + dur); o.stop(actx.currentTime + dur);
     } catch (e) {}
   }
-  // ---- procedural soundtrack (Web Audio, no audio files) ----
-  // Each track loops 4 bars of 16 steps. Notes are MIDI numbers; 0 means rest.
-  const TRACKS = {
-    menu: { bpm: 88, chords: [[57,60,64],[53,57,60],[48,52,55],[55,59,62]], drums: false,
-      lead: [69,0,0,72, 0,0,76,0, 74,0,72,0, 0,0,0,0,  69,0,0,72, 0,0,77,0, 76,0,72,0, 0,0,0,0,
-             67,0,0,72, 0,0,76,0, 79,0,76,0, 0,0,0,0,  74,0,0,71, 0,0,74,0, 67,0,0,0, 0,0,0,0] },
-    play: { bpm: 132, chords: [[57,60,64],[53,57,60],[48,52,55],[55,59,62]], drums: true,
-      lead: [76,0,76,79, 0,76,74,0, 72,0,74,76, 0,0,69,0,  77,0,77,81, 0,77,76,0, 72,0,74,77, 0,0,76,0,
-             79,0,79,84, 0,79,76,0, 72,0,76,79, 0,0,76,0,  74,0,74,79, 0,74,71,0, 74,0,79,83, 0,0,79,0] },
-    boss: { bpm: 152, chords: [[52,55,59],[52,55,59],[48,52,55],[50,54,57]], drums: true,
-      lead: [76,76,0,76, 79,0,76,0, 83,0,82,0, 79,0,76,0,  76,76,0,76, 79,0,76,0, 74,0,72,0, 71,0,0,0,
-             72,72,0,72, 76,0,72,0, 79,0,78,0, 76,0,72,0,  74,74,0,74, 78,0,74,0, 81,0,78,0, 74,0,0,0] },
-  };
-  let musicTimer = null, musicStep = 0, musicMode = "play", musicBus = null, nextNoteAt = 0, noiseBuf = null;
   let musicOn = true;
   try { musicOn = localStorage.getItem("skyrush_music") !== "off"; } catch (e) {}
-  const midiHz = (n) => 440 * Math.pow(2, (n - 69) / 12);
-  function ensureMusicBus() {
-    if (musicBus || !actx) return;
-    const comp = actx.createDynamicsCompressor();
-    musicBus = actx.createGain();
-    musicBus.connect(comp); comp.connect(actx.destination);
-    noiseBuf = actx.createBuffer(1, Math.floor(actx.sampleRate * 0.25), actx.sampleRate);
-    const d = noiseBuf.getChannelData(0);
-    for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
+  function trackFor(mode) {
+    if (mode === "menu") return "menu";
+    const m = mission();
+    return m.type === "boss" ? (m.final ? "final_boss" : "boss_" + A.NAMES[m.world]) : "play_" + A.NAMES[m.world];
   }
-  function mNote(t, midi, dur, vol, type, cutoff) {
-    const o = actx.createOscillator(), g = actx.createGain();
-    o.type = type; o.frequency.value = midiHz(midi);
-    g.gain.setValueAtTime(0.0001, t);
-    g.gain.exponentialRampToValueAtTime(vol, t + Math.min(0.015, dur / 3));
-    g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
-    if (cutoff) {
-      const f = actx.createBiquadFilter(); f.type = "lowpass"; f.frequency.value = cutoff;
-      o.connect(f); f.connect(g);
-    } else o.connect(g);
-    g.connect(musicBus); o.start(t); o.stop(t + dur + 0.02);
-  }
-  function mKick(t) {
-    const o = actx.createOscillator(), g = actx.createGain();
-    o.frequency.setValueAtTime(140, t); o.frequency.exponentialRampToValueAtTime(45, t + 0.12);
-    g.gain.setValueAtTime(0.4, t); g.gain.exponentialRampToValueAtTime(0.0001, t + 0.16);
-    o.connect(g); g.connect(musicBus); o.start(t); o.stop(t + 0.18);
-  }
-  function mNoise(t, dur, vol, freq) {
-    const s = actx.createBufferSource(), g = actx.createGain(), f = actx.createBiquadFilter();
-    s.buffer = noiseBuf; f.type = "highpass"; f.frequency.value = freq;
-    g.gain.setValueAtTime(vol, t); g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
-    s.connect(f); f.connect(g); g.connect(musicBus); s.start(t); s.stop(t + dur + 0.02);
-  }
-  function playStep(mode, step, t, sixteenth) {
-    const tr = TRACKS[mode], s = step % 16, chord = tr.chords[Math.floor(step / 16) % 4];
-    const lead = tr.lead[step % 64];
-    if (tr.drums) {
-      if (s % 4 === 0) mKick(t);
-      if (s % 8 === 4) mNoise(t, 0.14, 0.16, 1500);
-      if (s % 2 === 0) mNoise(t, 0.04, 0.05, 7000);
-      if (s % 2 === 0 || s === 7) mNote(t, chord[0] - 24, sixteenth * 1.6, 0.17, "sawtooth", 500);
-      if (s % 2 === 1) mNote(t, chord[Math.floor(step / 2) % 3] + 12, sixteenth * 1.3, 0.035, "square", 2600);
-      if (lead) mNote(t, lead, sixteenth * 1.8, 0.075, "square", 3200);
-    } else {
-      if (s === 0) chord.forEach((n) => mNote(t, n, sixteenth * 15, 0.05, "sawtooth", 750));
-      if (s === 0 || s === 8) mNote(t, chord[0] - 12, sixteenth * 7, 0.14, "triangle");
-      if (s % 2 === 0) mNote(t, chord[(s / 2) % 3] + 12, sixteenth * 3, 0.035, "triangle");
-      if (lead) mNote(t, lead, sixteenth * 5, 0.09, "sine");
-    }
-  }
-  function musicTick() {
-    if (!actx || !musicBus || !musicOn || actx.state !== "running") return;
-    let mode = musicMode;
-    if (mode !== "menu") {
-      if (G.state !== "playing") { nextNoteAt = actx.currentTime + 0.05; return; } // held while paused
-      mode = G.boss ? "boss" : "play";
-    }
-    const sixteenth = 60 / TRACKS[mode].bpm / 4;
-    if (nextNoteAt < actx.currentTime) nextNoteAt = actx.currentTime + 0.05;
-    while (nextNoteAt < actx.currentTime + 0.2) {
-      try { playStep(mode, musicStep, nextNoteAt, sixteenth); } catch (e) {}
-      nextNoteAt += sixteenth;
-      musicStep = (musicStep + 1) % 64;
-    }
-  }
-  function startMusic(mode) {
-    resumeAudio();
-    if (!actx) return;
-    ensureMusicBus();
-    const next = mode || "play";
-    if (next !== musicMode || !musicTimer) { musicStep = 0; nextNoteAt = 0; }
-    musicMode = next;
-    musicBus.gain.cancelScheduledValues(actx.currentTime);
-    musicBus.gain.setValueAtTime(musicOn ? 1 : 0, actx.currentTime);
-    if (!musicTimer) musicTimer = setInterval(musicTick, 50);
-  }
-  function stopMusic() {
-    if (musicTimer) { clearInterval(musicTimer); musicTimer = null; }
-    if (actx && musicBus) {
-      musicBus.gain.cancelScheduledValues(actx.currentTime);
-      musicBus.gain.setTargetAtTime(0, actx.currentTime, 0.04); // fade notes already queued
-    }
-  }
+  function startMusic(mode) { resumeAudio(); A.setMusicEnabled(musicOn); A.playMusic(["victory", "credits", "gameover"].includes(mode) ? mode : trackFor(mode)); }
+  function stopMusic() { A.stopMusic(); }
   function setMusicOn(on) {
     musicOn = on;
     try { localStorage.setItem("skyrush_music", on ? "on" : "off"); } catch (e) {}
-    if (actx && musicBus) {
-      musicBus.gain.cancelScheduledValues(actx.currentTime);
-      musicBus.gain.setValueAtTime(on ? 1 : 0, actx.currentTime);
-    }
-    nextNoteAt = 0;
+    A.setMusicEnabled(on);
   }
   // Browsers only allow audio after a touch; stop it when the app is in the background.
   document.addEventListener("pointerdown", resumeAudio);
@@ -343,27 +251,30 @@
   });
 
   // ---------- ENTITIES ----------
+  // 0 fighter: sways. 1 gunship: slow, aimed bursts. 2 interceptor: fast zigzag. 3 bomber: tough, wide spread.
+  const ETYPES = [
+    { hp: 1, sp: 1.05, r: 24, scale: .32, amp: 1, fire: .7 }, { hp: 1.6, sp: .8, r: 30, scale: .3, amp: .5, fire: 1 },
+    { hp: .8, sp: 1.45, r: 22, scale: .34, amp: 1.8, fire: .25 }, { hp: 3, sp: .6, r: 38, scale: .34, amp: .25, fire: 1 },
+  ];
   function spawnEnemy() {
     const m = mission();
-    const strong = Math.random() < 0.3;
-    const baseHp = Math.max(2, m.enemyHp * 2);          // double HP, min 2 (needs >=2 bullets)
+    const roll = Math.random(), t = G.missionIndex < 3 ? 0 : roll < .45 ? 0 : roll < .7 ? 1 : roll < .9 ? 2 : (G.missionIndex >= 8 ? 3 : 1);
+    const T = ETYPES[t], hp = Math.round(Math.max(2, m.enemyHp * 2) * T.hp);
     const x0 = 40 + Math.random() * (W - 80);
     enemies.push({
-      x: x0, baseX: x0, y: -60, spr: strong ? S.enemyB : S.enemyA,
-      hp: strong ? Math.round(baseHp * 1.4) : baseHp, max: strong ? Math.round(baseHp * 1.4) : baseHp,
-      speed: m.enemySpeed * 10 * (strong ? 0.85 : 1.05),
-      sway: Math.random() * 6.28, amp: 20 + Math.random() * 50,
-      canFire: Math.random() < 0.7, fireCd: 1.6 + Math.random() * 2.2,
-      bdmg: strong ? 2 : 1, btrack: 0.3 + Math.random() * 0.18, bspeed: strong ? 25 : 0,
-      r: strong ? 28 : 24, boss: false,
+      x: x0, baseX: x0, y: -60, type: t, spr: A.enemy(m.world, t), fb: t === 1 || t === 3 ? S.enemyB : S.enemyA, scale: T.scale,
+      hp: hp, max: hp, speed: m.enemySpeed * 10 * T.sp, sway: Math.random() * 6.28, amp: (20 + Math.random() * 50) * T.amp,
+      canFire: Math.random() < T.fire, fireCd: 1.2 + Math.random() * 2.2, bdmg: t === 3 ? 2 : 1, btrack: 0.3 + Math.random() * 0.18,
+      bspeed: t === 1 ? 25 : 0, r: T.r, boss: false, spread: t === 3,
     });
   }
   function spawnBoss() {
     const m = mission();
-    G.boss = { x: W / 2, y: -120, spr: BOSS_SPR[m.world] || S.boss, hp: m.bossHp, max: m.bossHp,
+    G.boss = { x: W / 2, y: -120, spr: A.bosses[m.world], fb: BOSS_SPR[m.world % 4], scale: .3, phase: 1, spin: 0, minion: 4, hp: m.bossHp, max: m.bossHp,
       speed: 110, dir: 1, fireCd: 1.0, r: 90, boss: true, entered: false,
       bdmg: 2, btrack: 0.4, bspeed: 30 };
     enemies.push(G.boss);
+    sfx("alarm", .35);
   }
   function spawnStar() {
     stars.push({ x: 40 + Math.random() * (W - 80), y: -30, spin: Math.random() * 3, r: 22, bob: Math.random() * 6.28 });
@@ -384,7 +295,7 @@
     else if (p === 4) offs = [-15, -5, 5, 15];
     else offs = [-18, -9, 0, 9, 18];
     offs.forEach(dx => bullets.push({ x: player.x + dx, y: player.y - 12, vx: dx * 0.55, col: col }));
-    beep(900, 0.03, 0.035);
+    if (!sfx("shot" + Math.min(2, G.power >> 1), .13)) beep(900, 0.03, 0.035);
   }
   function eFire(e) {
     const dmg = e.bdmg || 1, track = e.btrack || 0;
@@ -398,7 +309,15 @@
       // 65% aimed at player + 35% downward bias
       eBullets.push({ x: e.x, y: e.y, vx: rx * 0.65 * sp, vy: (ry * 0.65 + 0.35) * sp, dmg: dmg, track: track, r: r, col: col });
     };
-    if (e.boss) { for (let a = -0.5; a <= 0.5; a += 0.25) aim(a); }
+    if (e.boss) {
+      const ph = e.phase;
+      if (ph === 1 || ph === 3) for (let a = -0.5; a <= 0.5; a += 0.25) aim(a);
+      if (ph >= 2) { // ring with a gap the player can fly through
+        e.spin += .5; const count = ph >= 3 ? 16 : 12;
+        for (let i = 2; i < count; i++) { const a = e.spin + i / count * 6.283;
+          eBullets.push({ x: e.x, y: e.y, vx: Math.cos(a) * sp * .7, vy: Math.sin(a) * sp * .7, dmg: 1, track: 0, r: 5, col: "#ff4477" }); }
+      }
+    } else if (e.spread) { aim(-.35); aim(0); aim(.35); }
     else aim(0);
   }
   function boom(x, y, color, n) {
@@ -415,7 +334,7 @@
     G.pdmg = st.dmg; G.fireInt = 1 / st.fire; G.pspeed = st.speed;
     G.pshot = planeShot(window.SAVE.get().equipped);
     G.terrainWorld = mission().world || 0;
-    G.lives = 5; G.power = 1;
+    G.lives = 5; G.power = 1; G.bombs = 1; G.shield = 0; G.dying = null; G.shake = 0; G.flash = 0; fxs.length = 0;
     G.invuln = 1.2; G.elapsed = 0; G.runCoins = 0;
     G.enemyTimer = 0.5; G.starTimer = 1; G.fireTimer = 0; G.boss = null;
     bullets.length = eBullets.length = enemies.length = stars.length = parts.length = coinItems.length = 0;
@@ -445,9 +364,22 @@
     if (G.missionIndex >= window.MISSIONS.length - 1) { G.state = "win"; UI.showWin(); }
     else UI.showMissionComplete();
   }
-  function gameOver() { G.state = "over"; stopMusic(); bankRun(); boom(player.x, player.y, "#ff7733", 40); beep(180, 0.4, 0.1); UI.showGameOver(); }
+  function gameOver() { G.state = "over"; startMusic("gameover"); bankRun(); boom(player.x, player.y, "#ff7733", 40); beep(180, 0.4, 0.1); UI.showGameOver(); }
+  function useBomb() {
+    if (G.state !== "playing" || G.bombs <= 0 || G.dying) return;
+    G.bombs--; G.shake = 16; eBullets.length = 0; sfx("bomb", .8); G.flash = .5;
+    for (let i = enemies.length - 1; i >= 0; i--) {
+      const e = enemies[i];
+      if (e.boss) { e.hp = Math.max(1, e.hp - e.max * .08); continue; }
+      addFx(e.x, e.y, false, mission().world); enemies.splice(i, 1); G.score += 100; progress("kill");
+      if (G.state !== "playing") return;
+    }
+    UI.updateHUD();
+  }
   function hitPlayer(cost) {
     if (G.invuln > 0 || G.state !== "playing") return;
+    if (G.shield > 0) { G.shield = 0; G.invuln = 1; sfx("shield", .5); return; }
+    sfx("hurt", .5); G.shake = 9;
     G.lives -= (cost || 1); G.invuln = 1.3; beep(300, 0.12, 0.08);
     boom(player.x, player.y, "#ff7733", 12);
     if (G.power > 1) G.power--;                 // lose a power level when hit
@@ -464,7 +396,7 @@
   function check() {
     const m = mission();
     if (m.type === "survive") { if (G.elapsed >= m.goal) missionComplete(); }
-    else if (m.type === "boss") { if (G.boss && G.boss.hp <= 0) { G.progress = 1; missionComplete(); } }
+    else if (m.type === "boss") { if (G.progress >= 1) missionComplete(); }
     else { if (G.progress >= m.goal) missionComplete(); }
     UI.updateHUD();
   }
@@ -481,16 +413,28 @@
     }
     const dt = Math.min((t - last) / 1000 || 0, 0.05); last = t;
     G.scrollY = (G.scrollY + 190 * dt) % 1000000;
+    for (let i = fxs.length - 1; i >= 0; i--) { fxs[i].t += dt; if (fxs[i].t >= 1) fxs.splice(i, 1); }
+    G.shake = Math.max(0, (G.shake || 0) - dt * 26); G.flash = Math.max(0, (G.flash || 0) - dt);
+    ctx.save();
+    if (G.shake > 0) ctx.translate((Math.random() - .5) * G.shake, (Math.random() - .5) * G.shake);
     drawBackground();
     if (G.state === "playing") update(dt);
     drawEntities();
+    ctx.restore();
+    if (G.flash > 0) { ctx.fillStyle = "rgba(255,255,255," + G.flash + ")"; ctx.fillRect(0, 0, W, H); }
     updateParts(dt);
   }
 
   function update(dt) {
     const m = mission();
     G.elapsed += dt;
+    if (G.dying) {
+      const d = G.dying; d.t -= dt; d.next -= dt; G.invuln = 1;
+      if (d.next <= 0) { d.next = .16; addFx(d.x + (Math.random() - .5) * 240, d.y + (Math.random() - .5) * 170, Math.random() < .5, Math.random() * 3 | 0); G.shake = Math.max(G.shake, 8); sfx("boom1", .35); }
+      if (d.t <= 0) { addFx(d.x, d.y, true, 0); G.dying = null; G.progress = 1; check(); return; }
+    }
     if (G.invuln > 0) G.invuln -= dt;
+    if (G.shield > 0) G.shield -= dt;
 
     const k = 32 * G.pspeed * dt;
     if (keys["ArrowLeft"] || keys["a"]) player.tx -= k;
@@ -507,7 +451,7 @@
     const firing = input.active || keys[" "] || keys["Spacebar"];
     if (firing && G.fireTimer <= 0) { fire(); G.fireTimer = G.fireInt; }
 
-    if (m.type !== "boss") {
+    if (m.type !== "boss" && !G.dying) {
       G.enemyTimer -= dt;
       if (G.enemyTimer <= 0) {
         spawnEnemy();
@@ -528,14 +472,14 @@
         if (Math.abs(b.x - e.x) < e.r && Math.abs(b.y - e.y) < e.r) {
           bullets.splice(i, 1); e.hp -= G.pdmg; boom(b.x, b.y, "#aef", 3);
           if (e.hp <= 0) {
-            boom(e.x, e.y, e.boss ? "#ff3366" : "#7fff9f", e.boss ? 50 : 14);
+            boom(e.x, e.y, e.boss ? "#ff3366" : "#ffc36a", e.boss ? 50 : 8); addFx(e.x, e.y, e.boss || e.type === 3, m.world); sfx(e.boss ? "boom2" : "boom0", .4); G.shake = Math.max(G.shake, e.boss ? 12 : e.type === 3 ? 5 : 2);
             enemies.splice(j, 1); G.score += e.boss ? 5000 : 100;
             G.runCoins += e.boss ? 200 : 5; window.SAVE.get().stats.kills++;
             if (e.boss) { for (let k2 = 0; k2 < 10; k2++) spawnCoin(e.x + (Math.random() - .5) * 70, e.y); spawnPower(e.x, e.y); }
-            else { if (Math.random() < 0.35) spawnCoin(e.x, e.y); if (Math.random() < 0.08) spawnPower(e.x, e.y); }
-            beep(e.boss ? 120 : 440, 0.1, 0.07);
-            if (e.boss) { G.boss = null; check(); } else progress("kill");
-          } else { beep(680, 0.02, 0.04); if (e.boss) check(); }
+            else { if (Math.random() < 0.35) spawnCoin(e.x, e.y); if (Math.random() < 0.08) spawnPower(e.x, e.y); else if (Math.random() < 0.035) coinItems.push({ kind: "shield", x: e.x, y: e.y, spin: 0, vy: 120 }); else if (Math.random() < 0.025) coinItems.push({ kind: "bomb", x: e.x, y: e.y, spin: 0, vy: 120 }); }
+            
+            if (e.boss) { G.boss = null; G.dying = { x: e.x, y: e.y, t: m.final ? 5 : 2.8, spr: e.spr, next: 0 }; G.invuln = 9; eBullets.length = 0; enemies.length = 0; A.stopMusic(); sfx(m.final ? "boom3" : "boom2", .9); G.shake = 18; break; } else progress("kill");
+          } else { sfx("hit", .12) || beep(680, 0.02, 0.04); }
           break;
         }
       }
@@ -547,11 +491,16 @@
       if (e.boss) {
         if (!e.entered) { e.y += 80 * dt; if (e.y >= 130) e.entered = true; }
         else { e.x += e.dir * e.speed * dt; if (e.x < 110 || e.x > W - 110) e.dir *= -1; }
-        e.fireCd -= dt; if (e.fireCd <= 0 && e.entered) { eFire(e); e.fireCd = 0.9; }
+        const frac = e.hp / e.max, ph = frac < .33 ? 3 : frac < .66 ? 2 : 1;
+        if (ph !== e.phase) { e.phase = ph; G.shake = 10; addFx(e.x, e.y, true, 2); sfx("boom1", .6); UI.toast("Phase " + ph, "The boss is enraged!"); }
+        e.minion -= dt;
+        if (e.minion <= 0 && ph >= 2) { spawnEnemy(); e.minion = ph === 3 ? 3 : 5; }
+        e.fireCd -= dt; if (e.fireCd <= 0 && e.entered) { eFire(e); e.fireCd = ph === 3 ? 0.75 : 0.95; }
         continue;
       }
       e.y += e.speed * dt; e.sway += dt * 2;
       e.x = e.baseX + Math.sin(e.sway) * e.amp;
+      if (e.type === 2) e.x = e.baseX + Math.sign(Math.sin(e.sway * 1.4)) * e.amp * .6 + Math.sin(e.sway) * 20;
       e.x = Math.max(24, Math.min(W - 24, e.x));
       e.fireCd -= dt;
       if (e.canFire && e.fireCd <= 0 && e.y > 40 && e.y < H * 0.7) { eFire(e); e.fireCd = 2.2 + Math.random() * 2.4; }
@@ -589,7 +538,7 @@
       if (s.y > H + 30) { stars.splice(i, 1); continue; }
       if (Math.abs(s.x - player.x) < 30 && Math.abs(s.y - player.y) < 30) {
         stars.splice(i, 1); G.stars++; G.missionStars++; G.score += 25;
-        beep(1200, 0.06, 0.06); boom(s.x, s.y, "#ffcc22", 6); progress("star"); UI.updateHUD();
+        sfx("star", .35) || beep(1200, 0.06, 0.06); boom(s.x, s.y, "#ffcc22", 6); progress("star"); UI.updateHUD();
       }
     }
 
@@ -599,11 +548,13 @@
       if (co.y > H + 30) { coinItems.splice(i, 1); continue; }
       if (Math.abs(co.x - player.x) < 34 && Math.abs(co.y - player.y) < 34) {
         coinItems.splice(i, 1);
-        if (co.kind === "power") {
+        if (co.kind === "shield") { G.shield = 8; sfx("shield", .5); UI.toast("Shield!", "8 seconds of protection"); }
+        else if (co.kind === "bomb") { G.bombs = Math.min(3, G.bombs + 1); sfx("power", .5); UI.toast("Bomb +1", "Tap the bomb button to clear the sky"); }
+        else if (co.kind === "power") {
           G.power = Math.min(5, G.power + 1);
-          beep(1700, 0.08, 0.06); boom(co.x, co.y, "#4affd0", 8); UI.toast("Power Up!", "Weapon Lv " + G.power);
+          sfx("power", .5) || beep(1700, 0.08, 0.06); boom(co.x, co.y, "#4affd0", 8); UI.toast("Power Up!", "Weapon Lv " + G.power);
         } else {
-          G.runCoins += 10; G.score += 10; beep(1400, 0.05, 0.05); boom(co.x, co.y, "#ffcf3a", 5);
+          G.runCoins += 10; G.score += 10; sfx("coin", .3) || beep(1400, 0.05, 0.05); boom(co.x, co.y, "#ffcf3a", 5);
         }
         UI.updateHUD();
       }
@@ -622,18 +573,27 @@
 
   // ---------- RENDER ----------
   function drawBackground() {
+    if (!A.drawTerrain(ctx, W, H, G.scrollY, G.terrainWorld || 0)) drawTile();
+    for (let l = 0; l < 2; l++) { // parallax clouds
+      const c = A.cloud(G.terrainWorld || 0, l); if (!c.ready) continue;
+      const ch = W * 2, y = ((G.scrollY * (1.35 + l * .4)) % ch);
+      ctx.globalAlpha = l ? .34 : .2;
+      ctx.drawImage(c, 0, y, W, ch); ctx.drawImage(c, 0, y - ch, W, ch);
+      ctx.globalAlpha = 1;
+    }
+    const vg = ctx.createRadialGradient(W / 2, H / 2, H * 0.32, W / 2, H / 2, H * 0.8);
+    vg.addColorStop(0, "rgba(0,0,0,0)"); vg.addColorStop(1, "rgba(0,0,0,.32)");
+    ctx.fillStyle = vg; ctx.fillRect(0, 0, W, H);
+  }
+  function drawTile() {
     const px = W / TILE_LOW;          // low-res pixel -> screen scale
     const tH = TILE_H * px;           // on-screen tile height
     const off = ((G.scrollY % tH) + tH) % tH;
     ctx.imageSmoothingEnabled = false;
     for (let yy = off - tH; yy < H + tH; yy += tH) {
-      ctx.drawImage(terrains[G.terrainWorld || 0], 0, 0, TILE_LOW, TILE_H, 0, Math.round(yy), W, Math.ceil(tH) + 1);
+      ctx.drawImage(terrains[(G.terrainWorld || 0) % 4], 0, 0, TILE_LOW, TILE_H, 0, Math.round(yy), W, Math.ceil(tH) + 1);
     }
     ctx.imageSmoothingEnabled = true;
-    // vignette
-    const vg = ctx.createRadialGradient(W / 2, H / 2, H * 0.32, W / 2, H / 2, H * 0.8);
-    vg.addColorStop(0, "rgba(0,0,0,0)"); vg.addColorStop(1, "rgba(0,0,0,.32)");
-    ctx.fillStyle = vg; ctx.fillRect(0, 0, W, H);
   }
 
   function blit(spr, x, y, flip, scale) {
@@ -652,7 +612,10 @@
     }
     // coins (spin flip)
     for (const co of coinItems) {
-      if (co.kind === "power") {
+      if (co.kind === "shield" || co.kind === "bomb") {
+        ctx.fillStyle = co.kind === "bomb" ? "rgba(255,120,60,.9)" : "rgba(80,190,255,.9)"; ctx.beginPath(); ctx.arc(co.x, co.y, 16, 0, 6.28); ctx.fill();
+        ctx.fillStyle = "#fff"; ctx.font = "bold 16px sans-serif"; ctx.textAlign = "center"; ctx.textBaseline = "middle"; ctx.fillText(co.kind === "bomb" ? "💣" : "🛡", co.x, co.y + 1);
+      } else if (co.kind === "power") {
         const pr = 15 + Math.sin(co.spin * 2) * 2;
         const gg = ctx.createRadialGradient(co.x, co.y, 2, co.x, co.y, pr);
         gg.addColorStop(0, "#ffffff"); gg.addColorStop(.4, "#4affd0"); gg.addColorStop(1, "rgba(74,255,208,0)");
@@ -685,7 +648,7 @@
     }
     // enemies (nose-down => flip)
     for (const e of enemies) {
-      blit(e.spr, e.x, e.y, true, e.boss ? 0.85 : 0.62);
+      if (e.spr && e.spr.ready) blit(e.spr, e.x, e.y, true, e.scale * Math.min(1, W / 420 + .1)); else blit(e.fb, e.x, e.y, true, e.boss ? 0.85 : 0.62);
       if (e.boss) { // boss hp bar
         ctx.fillStyle = "rgba(0,0,0,.5)"; ctx.fillRect(W / 2 - 120, 70, 240, 10);
         ctx.fillStyle = "#ff3366"; ctx.fillRect(W / 2 - 120, 70, 240 * Math.max(0, e.hp / e.max), 10);
@@ -705,8 +668,17 @@
     // player (blink on invuln)
     if (G.state === "playing" || G.state === "paused") {
       if (G.invuln > 0) ctx.globalAlpha = 0.45 + 0.4 * Math.abs(Math.sin(G.elapsed * 10));
-      blit(equippedSprite(), player.x, player.y, false, 0.62);
+      const hi = A.planes[window.SAVE.get().equipped];
+      if (hi && hi.ready) blit(hi, player.x, player.y, false, .17); else blit(equippedSprite(), player.x, player.y, false, 0.62);
       ctx.globalAlpha = 1;
+      if (G.shield > 0) { ctx.strokeStyle = "rgba(90,220,255,.85)"; ctx.fillStyle = "rgba(90,220,255,.12)"; ctx.lineWidth = 3; ctx.beginPath(); ctx.arc(player.x, player.y, 46, 0, 6.28); ctx.stroke(); ctx.fill(); }
+    }
+    if (G.dying && G.dying.spr && G.dying.spr.ready) { ctx.globalAlpha = Math.min(1, G.dying.t / 1.2); blit(G.dying.spr, G.dying.x + Math.sin(G.dying.t * 40) * 4, G.dying.y, true, .3); ctx.globalAlpha = 1; }
+    // sprite-sheet explosions: 36 frames, 6 columns
+    for (const f of fxs) {
+      const img = A.sheet(f.v, f.big), fr = Math.floor(f.t * 36); if (!img.ready || fr > 35) continue;
+      const cs = img.width / 6, ds = f.big ? 230 : 110;
+      ctx.drawImage(img, (fr % 6) * cs, Math.floor(fr / 6) * cs, cs, cs, f.x - ds / 2, f.y - ds / 2, ds, ds);
     }
     // particles
     for (const p of parts) { ctx.globalAlpha = Math.max(0, p.life * 2); ctx.fillStyle = p.c; ctx.fillRect(p.x - p.s / 2, p.y - p.s / 2, p.s, p.s); }
@@ -722,6 +694,7 @@
       const m = mission();
       this.el("score").textContent = G.score;
       this.el("starcount").textContent = (window.SAVE.get().stars + G.missionStars);
+      const bb = this.el("bombBtn"); if (bb) bb.textContent = "💣 " + G.bombs;
       let hearts = ""; for (let i = 0; i < G.lives; i++) hearts += "❤";
       this.el("lives").textContent = hearts || "—";
       const powerPercent = Math.max(0, Math.min(100, G.power / 5 * 100));
@@ -778,7 +751,7 @@
         <p class="hint">Drag to fly · Auto-fire · Earn 🪙 to buy & upgrade planes</p>
         <p class="hint">Build by Gm Anondo</p>
       </div>`);
-      this.el("bStart").onclick = () => { resumeAudio(); G.lives = 3; G.score = 0; this.hide(); startMission(start); };
+      this.el("bStart").onclick = () => { resumeAudio(); G.score = 0; if (window.SAVE.get().unlocked > window.MISSIONS.length) this.showSelect(); else this.brief(start); };
       this.el("bMusic").onclick = (e) => { setMusicOn(!musicOn); e.currentTarget.textContent = musicOn ? "🎵 Music: On" : "🔇 Music: Off"; };
       this.el("bDaily").onclick = () => this.showDaily();
       this.el("bSel").onclick = () => this.showSelect();
@@ -797,7 +770,7 @@
       this.over(`<div class="panel wide"><h2>Select Mission</h2><div class="mgrid">${grid}</div>
         <button id="bBack" class="btn ghost">← Back</button></div>`);
       this.el("overlay").querySelectorAll(".mcell:not(.locked)").forEach(b =>
-        b.onclick = () => { resumeAudio(); G.lives = 3; G.score = 0; this.hide(); startMission(+b.dataset.i); });
+        b.onclick = () => { resumeAudio(); G.score = 0; this.brief(+b.dataset.i); });
       this.el("bBack").onclick = () => this.showMenu();
     },
     showMissionComplete() {
@@ -807,7 +780,7 @@
         <div class="stats"><div><span>⭐ Stars</span><b>${G.missionStarsShown || 0}</b></div><div><span>🪙 Earned</span><b>+${G.lastReward || 0}</b></div><div><span>Score</span><b>${G.score}</b></div></div>
         <button id="bNext" class="btn">▶ Next Mission (${next + 1})</button>
         <button id="bMenu" class="btn ghost">Menu</button></div>`);
-      this.el("bNext").onclick = () => { this.hide(); startMission(next); };
+      this.el("bNext").onclick = () => this.brief(next);
       this.el("bMenu").onclick = () => this.showMenu();
     },
     showGameOver() {
@@ -816,14 +789,32 @@
         <p class="sub">Mission ${mission().id} — ${mission().name}</p>
         <div class="stats"><div><span>Score</span><b>${G.score}</b></div><div><span>🪙 Earned</span><b>+${G.lastReward || 0}</b></div></div>
         <button id="bRetry" class="btn">↻ Retry</button><button id="bMenu" class="btn ghost">Menu</button></div>`);
-      this.el("bRetry").onclick = () => { this.hide(); G.lives = 3; startMission(G.missionIndex); };
+      this.el("bRetry").onclick = () => { this.hide(); startMission(G.missionIndex); };
       this.el("bMenu").onclick = () => this.showMenu();
     },
-    showWin() {
+    brief(idx) {
+      const m = window.MISSIONS[idx], go = () => { this.hide(); startMission(idx); };
+      if (idx % 10 !== 0 && m.type !== "boss") return go();
+      const art = A.worldArt(m.world);
       this.hideHUD();
+      this.over(`<div class="panel"><img src="${art.src}" class="brief"/><h2>${m.type === "boss" ? "⚠ " + m.bossName : window.WORLDS[m.world].name}</h2>
+        <p class="sub">${m.type === "boss" ? m.desc : window.WORLDS[m.world].story}</p><button id="bGo" class="btn">▶ Launch</button></div>`);
+      this.el("bGo").onclick = go;
+    },
+    showWin() {
+      this.hideHUD(); startMusic("victory");
       this.over(`<div class="panel"><h1>🏆 Victory!</h1><p class="sub">You cleared all ${window.MISSIONS.length} missions!</p>
         <div class="stats"><div><span>Score</span><b>${G.score}</b></div><div><span>⭐</span><b>${window.SAVE.get().stars}</b></div></div>
-        <button id="bMenu" class="btn">🏠 Menu</button></div>`);
+        <p class="sub">The Eclipse Core is destroyed. The skies are free.</p>
+        <button id="bCred" class="btn">🎬 Credits</button><button id="bMenu" class="btn ghost">🏠 Menu</button></div>`);
+      this.el("bCred").onclick = () => this.showCredits();
+      this.el("bMenu").onclick = () => this.showMenu();
+    },
+    showCredits() {
+      startMusic("credits");
+      this.over(`<div class="credits"><div class="roll"><h1>SKY <span>RUSH</span></h1><p>Built by<br><b>Gm Anondo</b></p>
+        ${window.WORLDS.map(w => `<p>${w.name}<br><b>Liberated</b></p>`).join("")}<p>Thank you for playing</p></div>
+        <button id="bMenu" class="btn ghost">🏠 Menu</button></div>`);
       this.el("bMenu").onclick = () => this.showMenu();
     },
     statBar(label, val, max) {
@@ -909,7 +900,7 @@
     },
   };
 
-  window.SF = { G, startMission, UI };
+  window.SF = { G, startMission, UI, enemies, aim(x) { player.tx = x; player.x = x; } };
 
   // ---------- BOOT ----------
   measure();
@@ -917,8 +908,10 @@
   requestAnimationFrame(loop);
   UI.showSplash();
   const pb = document.getElementById("pauseBtn");
+  const bb = document.getElementById("bombBtn"); if (bb) bb.onclick = useBomb;
+  window.addEventListener("keydown", (e) => { if (e.key === "b") useBomb(); });
   if (pb) pb.onclick = () => {
-    if (G.state === "playing") { G.state = "paused"; UI.toast("Paused", "Tap ⏸ to resume"); }
-    else if (G.state === "paused") { G.state = "playing"; last = performance.now(); }
+    if (G.state === "playing") { G.state = "paused"; window.__gamePaused = true; A.pauseMusic(true); UI.toast("Paused", "Tap ⏸ to resume"); }
+    else if (G.state === "paused") { G.state = "playing"; window.__gamePaused = false; A.pauseMusic(false); last = performance.now(); }
   };
 })();

@@ -137,6 +137,12 @@
     .bars { padding-bottom: 2px; }
   }
 
+  .brief { width: 100%; max-height: 42vh; object-fit: cover; border-radius: 12px; margin-bottom: 12px; }
+  .credits { position: fixed; inset: 0; background: #050812; overflow: hidden; text-align: center; padding: 20px; display: flex; flex-direction: column; justify-content: flex-end; }
+  .roll { position: absolute; inset: 0 20px; animation: roll 30s linear forwards; font-size: 18px; }
+  .roll p { margin: 44px 0; } .roll h1 span { color: #4ad0ff; }
+  @keyframes roll { from { transform: translateY(100vh); } to { transform: translateY(-110%); } }
+  .credits .btn { position: relative; }
   /* Daily */
   .dot { color: #4affa6; }
   .ghostdis { background: #555b66 !important; opacity: .7; }
@@ -159,6 +165,7 @@
       <div class="chip metric"><small>SCORE</small> <span id="score">0</span></div>
       <div class="chip metric"><small>⭐ STARS</small> <span id="starcount">0</span></div>
       <div class="chip metric"><small>🪙 COINS</small> <span id="coincount">0</span></div>
+      <div class="chip" id="bombBtn" style="pointer-events:auto;cursor:pointer">💣 1</div>
       <div class="chip" id="pauseBtn">⏸</div>
     </div>
     <div class="bars">
@@ -178,6 +185,7 @@
 
   <script src="js/missions.js"></script>
   <script src="js/data.js"></script>
+  <script src="js/assets.js"></script>
   <script src="js/sprites.js"></script>
   <script src="js/game2d.js"></script>
 </body>

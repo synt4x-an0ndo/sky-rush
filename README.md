@@ -19,7 +19,13 @@ A top-down plane shooter game for Android.
 
 ## Build from source
 
-Requires Node.js, a JDK and the Android SDK.
+Requires Node.js, a JDK and the Android SDK. The art and music (about 370 MB) are not stored in git; generate them first with Python (numpy, scipy, Pillow, soundfile):
+
+```
+python tools/gen_terrain.py www/assets --chunks 32
+python tools/gen_audio.py www/assets
+python tools/gen_sprites.py www/assets .
+```
 
 ```
 npm install

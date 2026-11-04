@@ -6,3 +6,5 @@ dist/
 *.keystore
 .env
 .vscode/
+www/assets/
+android/app/src/main/assets/public/
